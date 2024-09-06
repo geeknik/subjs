@@ -22,22 +22,29 @@ To display the help for the tool use the `-h` flag:
 
 ```bash
 $ subjs -h
+Usage of subjs:
+  -c int
+    	Number of concurrent workers (default 10)
+  -i string
+    	Input file containing URLS
+  -insecure
+    	Skip TLS certificate verification
+  -t int
+    	Timeout (in seconds) for http client (default 15)
+  -ua string
+    	User-Agent to send in requests
+  -version
 ```
-
-| Flag | Description | Example |
-|------|-------------|---------|
-| `-c` | Number of concurrent workers | `subjs -c 40` |
-| `-i` | Input file containing URLS | `subjs -i urls.txt` |
-| `-t` | Timeout (in seconds) for http client (default 15) | `subjs -t 20` |
-| `-ua` | User-Agent to send in requests | `subjs -ua "Chrome..."` |
-| `-version` | Show version number | `subjs -version"` |
-
 
 ## Installation
 ### From Source:
 
 ```
-$ GO111MODULE=on go get -u -v github.com/geeknik/subjs@latest
+$ git clone https://github.com/geeknik/subjs
+$ cd subjs
+$ go build .
+$ go install
+$ subjs -version
 ```
 
 Original author: [lc](https://github.com/lc/)
