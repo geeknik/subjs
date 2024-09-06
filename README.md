@@ -1,10 +1,10 @@
 # subjs
 [![License](https://img.shields.io/badge/license-MIT-_red.svg)](https://opensource.org/licenses/MIT)
-[!(https://goreportcard.com/report/github.com/geeknik/subjs)]
+[![Go ReportCard](https://goreportcard.com/badge/github.com/geeknik/subjs)](https://goreportcard.com/report/github.com/geeknik/subjs)
 
 subjs fetches javascript files from a list of URLS or subdomains. Analyzing javascript files can help you find undocumented endpoints, secrets, and more.
 
-It's recommended to pair this with [gau](https://github.com/lc/gau) and then [https://github.com/GerbenJavado/LinkFinder](https://github.com/GerbenJavado/LinkFinder)
+It's recommended to pair this with [gau](https://github.com/lc/gau) and then [linkfinder](https://github.com/GerbenJavado/LinkFinder). Or even [gofuzz](https://github.com/nullenc0de/gofuzz).
 
 # Resources
 - [Usage](#usage)
