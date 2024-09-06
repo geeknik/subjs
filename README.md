@@ -37,17 +37,7 @@ $ subjs -h
 ### From Source:
 
 ```
-$ GO111MODULE=on go get -u -v github.com/lc/subjs@latest
+$ GO111MODULE=on go get -u -v github.com/geeknik/subjs@latest
 ```
 
-### From Binary
-You can download the pre-built [binaries](https://github.com/lc/subjs/releases/) from the releases page and then move them into your $PATH.
-
-```
-$ tar xvf subjs_1.0.0_linux_amd64.tar.gz
-$ mv subjs /usr/bin/subjs
-```
-
-## Useful?
-
-<a href="http://buymeacoff.ee/cdl" target="_blank"><img src="https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png" alt="Buy Me A Coffee" style="height: 41px !important;width: 174px !important;box-shadow: 0px 3px 2px 0px rgba(190, 190, 190, 0.5) !important;-webkit-box-shadow: 0px 3px 2px 0px rgba(190, 190, 190, 0.5) !important;" ></a>
+Original author: [lc](https://github.com/lc/)
