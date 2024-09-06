@@ -1,6 +1,6 @@
 # subjs
 [![License](https://img.shields.io/badge/license-MIT-_red.svg)](https://opensource.org/licenses/MIT)
-[![Go ReportCard](https://goreportcard.com/badge/github.com/lc/gau)](https://goreportcard.com/report/github.com/lc/subjs)
+[!(https://goreportcard.com/report/github.com/geeknik/subjs)]
 
 subjs fetches javascript files from a list of URLS or subdomains. Analyzing javascript files can help you find undocumented endpoints, secrets, and more.
 
