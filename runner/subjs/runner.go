@@ -63,8 +63,6 @@ func (s *SubJS) Run() error {
 	urls := make(chan string, s.opts.Workers)
 	results := make(chan string, s.opts.Workers)
 
-	// Initialize a map to track seen URLs
-	seen := make(map[string]struct{})
 
 	// Start workers
 	var wg sync.WaitGroup
@@ -96,6 +94,7 @@ func (s *SubJS) Run() error {
 	return nil
 }
 func (s *SubJS) fetch(ctx context.Context, urls <-chan string, results chan string) {
+	seen := make(map[string]struct{})
 	for u := range urls {
 		var (
 			resp *http.Response
