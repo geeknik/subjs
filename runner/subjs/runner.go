@@ -63,6 +63,9 @@ func (s *SubJS) Run() error {
 	urls := make(chan string, s.opts.Workers)
 	results := make(chan string, s.opts.Workers)
 
+	// Initialize a map to track seen URLs
+	seen := make(map[string]struct{})
+
 	// Start workers
 	var wg sync.WaitGroup
 	for i := 0; i < s.opts.Workers; i++ {
@@ -126,13 +129,22 @@ func (s *SubJS) fetch(ctx context.Context, urls <-chan string, results chan stri
 			js, _ := s.Attr("src")
 			if js != "" {
 				if strings.HasPrefix(js, "http://") || strings.HasPrefix(js, "https://") {
-					results <- js
+					if _, exists := seen[js]; !exists {
+						seen[js] = struct{}{}
+						results <- js
+					}
 				} else if strings.HasPrefix(js, "//") {
 					js = fmt.Sprintf("%s:%s", parsedURL.Scheme, js)
-					results <- js
+					if _, exists := seen[js]; !exists {
+						seen[js] = struct{}{}
+						results <- js
+					}
 				} else if strings.HasPrefix(js, "/") {
 					js = fmt.Sprintf("%s://%s%s", parsedURL.Scheme, parsedURL.Host, js)
-					results <- js
+					if _, exists := seen[js]; !exists {
+						seen[js] = struct{}{}
+						results <- js
+					}
 				} else {
 					js = fmt.Sprintf("%s://%s/%s", parsedURL.Scheme, parsedURL.Host, js)
 					results <- js
