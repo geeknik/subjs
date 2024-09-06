@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.2.0] - 2024-09-06
+## [1.1.1] - 2024-09-06
 ### Changed
 - Incremented version number to 1.2.0.
 ### Added
