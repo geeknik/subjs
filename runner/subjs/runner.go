@@ -49,7 +49,7 @@ func (s *SubJS) Run() error {
 		// otherwise read from file
 		input, err = os.Open(s.opts.InputFile)
 		if err != nil {
-			log.Printf("Error fetching URL %s: %v", u, err)
+			log.Printf("Error fetching URL: %v", err)
 			log.Printf("Could not open input file: %s", err)
 			return err
 		}
@@ -67,10 +67,10 @@ func (s *SubJS) Run() error {
 	var wg sync.WaitGroup
 	for i := 0; i < s.opts.Workers; i++ {
 		wg.Add(1)
-		go func() {
+		go func(ctx context.Context) {
 			defer wg.Done()
-			s.fetch(urls, results)
-		}()
+			s.fetch(ctx, urls, results)
+		}(ctx)
 	}
 
 	// Setup output
@@ -92,13 +92,12 @@ func (s *SubJS) Run() error {
 	close(results)
 	return nil
 }
-func (s *SubJS) fetch(urls <-chan string, results chan string) {
+func (s *SubJS) fetch(ctx context.Context, urls <-chan string, results chan string) {
 	for u := range urls {
 		var (
 			resp *http.Response
 			err  error
 		)
-		var err error
 		for retries := 0; retries < 3; retries++ {
 			req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
 			if err != nil {
@@ -157,13 +156,13 @@ func (s *SubJS) fetch(urls <-chan string, results chan string) {
 				if strings.HasPrefix(js, "http://") || strings.HasPrefix(js, "https://") {
 					results <- js
 				} else if strings.HasPrefix(js, "//") {
-					js := fmt.Sprintf("%s:%s", u.Scheme, js)
+					js = fmt.Sprintf("%s:%s", parsedURL.Scheme, js)
 					results <- js
 				} else if strings.HasPrefix(js, "/") {
-					js := fmt.Sprintf("%s://%s%s", u.Scheme, u.Host, js)
+					js = fmt.Sprintf("%s://%s%s", parsedURL.Scheme, parsedURL.Host, js)
 					results <- js
 				} else {
-					js := fmt.Sprintf("%s://%s/%s", u.Scheme, u.Host, js)
+					js = fmt.Sprintf("%s://%s/%s", parsedURL.Scheme, parsedURL.Host, js)
 					results <- js
 				}
 			}
