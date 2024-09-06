@@ -9,7 +9,9 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"math/rand"
 	"strings"
+	"time"
 	"sync"
 	"time"
 
@@ -28,6 +30,12 @@ func New(opts *Options) *SubJS {
 		Timeout:   time.Duration(opts.Timeout) * time.Second,
 		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
 	}
+	opts.UserAgents = []string{
+		"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3",
+		"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/57.0.2987.133 Safari/537.3",
+		"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/56.0.2924.87 Safari/537.3",
+	}
+	rand.Seed(time.Now().UnixNano())
 	return &SubJS{client: c, opts: opts}
 }
 func (s *SubJS) Run() error {
@@ -85,22 +93,26 @@ func (s *SubJS) Run() error {
 }
 func (s *SubJS) fetch(urls <-chan string, results chan string) {
 	for u := range urls {
-		req, err := http.NewRequest("GET", u, nil)
-		if err != nil {
-			log.Printf("Error creating request for URL %s: %v", u, err)
-			continue
+		var resp *http.Response
+		var err error
+		for retries := 0; retries < 3; retries++ {
+			req, err := http.NewRequest("GET", u, nil)
+			if err != nil {
+				log.Printf("Error creating request for URL %s: %v", u, err)
+				break
+			}
+			req.Header.Add("User-Agent", s.opts.RotateUserAgent())
+			resp, err = s.client.Do(req)
+			if err == nil {
+				break
+			}
+			log.Printf("Retrying URL %s: attempt %d", u, retries+1)
+			time.Sleep(time.Duration(rand.Intn(3)) * time.Second)
 		}
 		if err != nil {
+			log.Printf("Failed to fetch URL %s after retries", u)
 			continue
 		}
-		if s.opts.UserAgent != "" {
-			req.Header.Add("User-Agent", s.opts.UserAgent)
-		}
-		resp, err := s.client.Do(req)
-		if err != nil {
-			continue
-		}
-		defer resp.Body.Close()
 		doc, err := goquery.NewDocumentFromReader(resp.Body)
 		if err != nil {
 			log.Printf("Error parsing document from URL %s: %v", u, err)

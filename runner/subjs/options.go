@@ -11,6 +11,16 @@ type Options struct {
 	Workers   int
 	Timeout   int
 	UserAgent string
+	UserAgents []string
+}
+
+func (opts *Options) RotateUserAgent() string {
+	if len(opts.UserAgents) == 0 {
+		return ""
+	}
+	ua := opts.UserAgents[0]
+	opts.UserAgents = append(opts.UserAgents[1:], ua)
+	return ua
 }
 
 func ParseOptions() *Options {
