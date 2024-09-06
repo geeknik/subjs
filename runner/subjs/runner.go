@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"crypto/tls"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -40,7 +41,9 @@ func (s *SubJS) Run() error {
 		// otherwise read from file
 		input, err = os.Open(s.opts.InputFile)
 		if err != nil {
-			return fmt.Errorf("Could not open input file: %s", err)
+			log.Printf("Error fetching URL %s: %v", u, err)
+			log.Printf("Could not open input file: %s", err)
+			return err
 		}
 		defer input.Close()
 	}
@@ -84,6 +87,10 @@ func (s *SubJS) fetch(urls <-chan string, results chan string) {
 	for u := range urls {
 		req, err := http.NewRequest("GET", u, nil)
 		if err != nil {
+			log.Printf("Error creating request for URL %s: %v", u, err)
+			continue
+		}
+		if err != nil {
 			continue
 		}
 		if s.opts.UserAgent != "" {
@@ -96,12 +103,15 @@ func (s *SubJS) fetch(urls <-chan string, results chan string) {
 		defer resp.Body.Close()
 		doc, err := goquery.NewDocumentFromReader(resp.Body)
 		if err != nil {
+			log.Printf("Error parsing document from URL %s: %v", u, err)
+			continue
+		}
+		if err != nil {
 			continue
 		}
 		u, err := url.Parse(u)
 		if err != nil {
-			// handle error
-			//log.Fatalf("error parsing url: %v", err)
+			log.Printf("Error parsing URL %s: %v", u, err)
 			return
 		}
 		doc.Find("script").Each(func(index int, s *goquery.Selection) {
