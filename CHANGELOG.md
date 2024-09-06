@@ -1,7 +1,8 @@
 # Changelog
 
 ## [Unreleased]
-### Fixed
+### Added
+- Made TLS certificate verification configurable via command-line flag.
 - Eliminated duplicate JavaScript files in output by tracking seen URLs.
 
 ### Fixed
