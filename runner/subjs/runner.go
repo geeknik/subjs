@@ -11,9 +11,7 @@ import (
 	"regexp"
 	"math/rand"
 	"strings"
-	"time"
 	"sync"
-	"time"
 
 	"github.com/PuerkitoBio/goquery"
 )
@@ -39,7 +37,7 @@ func New(opts *Options) *SubJS {
 	return &SubJS{client: c, opts: opts}
 }
 func (s *SubJS) Run() error {
-	// setup input
+	// Setup input
 	var input *os.File
 	var err error
 	// if input file not specified then read from stdin
@@ -56,39 +54,37 @@ func (s *SubJS) Run() error {
 		defer input.Close()
 	}
 
-	// init channels
-	urls := make(chan string)
-	results := make(chan string)
+	// Initialize channels
+	urls := make(chan string, s.opts.Workers)
+	results := make(chan string, s.opts.Workers)
 
-	// start workers
-	var w sync.WaitGroup
+	// Start workers
+	var wg sync.WaitGroup
 	for i := 0; i < s.opts.Workers; i++ {
-		w.Add(1)
+		wg.Add(1)
 		go func() {
+			defer wg.Done()
 			s.fetch(urls, results)
-			w.Done()
 		}()
 	}
-	// setup output
-	var out sync.WaitGroup
-	out.Add(1)
+
+	// Setup output
 	go func() {
 		for result := range results {
 			fmt.Println(result)
 		}
-		out.Done()
 	}()
-	scan := bufio.NewScanner(input)
-	for scan.Scan() {
-		u := scan.Text()
+
+	scanner := bufio.NewScanner(input)
+	for scanner.Scan() {
+		u := scanner.Text()
 		if u != "" {
 			urls <- u
 		}
 	}
 	close(urls)
-	w.Wait()
+	wg.Wait()
 	close(results)
-	out.Wait()
 	return nil
 }
 func (s *SubJS) fetch(urls <-chan string, results chan string) {
@@ -118,14 +114,7 @@ func (s *SubJS) fetch(urls <-chan string, results chan string) {
 			log.Printf("Error parsing document from URL %s: %v", u, err)
 			continue
 		}
-		if err != nil {
-			continue
-		}
 		u, err := url.Parse(u)
-		if err != nil {
-			log.Printf("Error parsing URL %s: %v", u, err)
-			return
-		}
 		doc.Find("script").Each(func(index int, s *goquery.Selection) {
 			js, _ := s.Attr("src")
 			if js != "" {
