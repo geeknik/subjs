@@ -1,4 +1,4 @@
-module github.com/lc/subjs
+module github.com/geeknik/subjs
 
 go 1.15
 
