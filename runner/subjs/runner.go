@@ -2,7 +2,9 @@ package subjs
 
 import (
 	"bufio"
+	"context"
 	"crypto/tls"
+	"time"
 	"fmt"
 	"log"
 	"net/http"
@@ -54,6 +56,9 @@ func (s *SubJS) Run() error {
 		defer input.Close()
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(s.opts.Timeout)*time.Second)
+	defer cancel()
+
 	// Initialize channels
 	urls := make(chan string, s.opts.Workers)
 	results := make(chan string, s.opts.Workers)
@@ -89,10 +94,13 @@ func (s *SubJS) Run() error {
 }
 func (s *SubJS) fetch(urls <-chan string, results chan string) {
 	for u := range urls {
-		var resp *http.Response
+		var (
+			resp *http.Response
+			err  error
+		)
 		var err error
 		for retries := 0; retries < 3; retries++ {
-			req, err := http.NewRequest("GET", u, nil)
+			req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
 			if err != nil {
 				log.Printf("Error creating request for URL %s: %v", u, err)
 				break
@@ -114,20 +122,20 @@ func (s *SubJS) fetch(urls <-chan string, results chan string) {
 			log.Printf("Error parsing document from URL %s: %v", u, err)
 			continue
 		}
-		u, err := url.Parse(u)
+		parsedURL, err := url.Parse(u)
 		doc.Find("script").Each(func(index int, s *goquery.Selection) {
 			js, _ := s.Attr("src")
 			if js != "" {
 				if strings.HasPrefix(js, "http://") || strings.HasPrefix(js, "https://") {
 					results <- js
 				} else if strings.HasPrefix(js, "//") {
-					js := fmt.Sprintf("%s:%s", u.Scheme, js)
+					js = fmt.Sprintf("%s:%s", parsedURL.Scheme, js)
 					results <- js
 				} else if strings.HasPrefix(js, "/") {
-					js := fmt.Sprintf("%s://%s%s", u.Scheme, u.Host, js)
+					js = fmt.Sprintf("%s://%s%s", parsedURL.Scheme, parsedURL.Host, js)
 					results <- js
 				} else {
-					js := fmt.Sprintf("%s://%s/%s", u.Scheme, u.Host, js)
+					js = fmt.Sprintf("%s://%s/%s", parsedURL.Scheme, parsedURL.Host, js)
 					results <- js
 				}
 			}
@@ -135,10 +143,10 @@ func (s *SubJS) fetch(urls <-chan string, results chan string) {
 			matches := r.FindAllString(s.Contents().Text(), -1)
 			for _, js := range matches {
 				if strings.HasPrefix(js, "//") {
-					js := fmt.Sprintf("%s:%s", u.Scheme, js)
+					js = fmt.Sprintf("%s:%s", parsedURL.Scheme, js)
 					results <- js
 				} else if strings.HasPrefix(js, "/") {
-					js := fmt.Sprintf("%s://%s%s", u.Scheme, u.Host, js)
+					js = fmt.Sprintf("%s://%s%s", parsedURL.Scheme, parsedURL.Host, js)
 					results <- js
 				}
 			}
