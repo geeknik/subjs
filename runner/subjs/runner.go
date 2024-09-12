@@ -17,7 +17,7 @@ import (
 	"github.com/PuerkitoBio/goquery"
 )
 
-const version = `1.1.3`
+const version = `1.1.4`
 
 type SubJS struct {
 	client *http.Client
