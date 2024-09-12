@@ -26,7 +26,11 @@ type SubJS struct {
 
 func New(opts *Options) *SubJS {
 	c := &http.Client{
-		Timeout:   time.Duration(opts.Timeout) * time.Second,
+		Timeout:   time.Duration(opts.Timeout+10) * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			// Allow following redirects
+			return nil
+		},
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: opts.InsecureSkipVerify},
 			// Allow following redirects
