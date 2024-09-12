@@ -40,11 +40,11 @@ Usage of subjs:
 ### From Source:
 
 ```
-$ git clone https://github.com/geeknik/subjs
-$ cd subjs
-$ go build .
-$ go install
-$ subjs -version
+git clone https://github.com/geeknik/subjs
+cd subjs
+go build .
+go install
+subjs -version
 ```
 
 Original author: [lc](https://github.com/lc/)
