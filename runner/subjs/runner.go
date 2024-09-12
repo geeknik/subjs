@@ -96,10 +96,16 @@ func (s *SubJS) Run() error {
 func (s *SubJS) fetch(ctx context.Context, urls <-chan string, results chan string) {
     seen := make(map[string]struct{})
     for u := range urls {
+        if u == "" {
+            log.Printf("Empty URL encountered")
+            continue
+        }
+
         var (
             resp *http.Response
             err  error
         )
+
         for retries := 0; retries < 3; retries++ {
             req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
             if err != nil {
@@ -107,18 +113,25 @@ func (s *SubJS) fetch(ctx context.Context, urls <-chan string, results chan stri
                 break
             }
             req.Header.Add("User-Agent", s.opts.RotateUserAgent())
+
             resp, err = s.client.Do(req)
-            if err == nil && resp.StatusCode == http.StatusOK {
+            if err == nil && resp != nil && resp.StatusCode == http.StatusOK {
                 break
             }
-            log.Printf("Retrying URL %s: attempt %d, Status Code: %d", u, retries+1, resp.StatusCode)
+            if resp != nil {
+                log.Printf("Retrying URL %s: attempt %d, Status Code: %d", u, retries+1, resp.StatusCode)
+            } else {
+                log.Printf("Retrying URL %s: attempt %d", u, retries+1)
+            }
             time.Sleep(time.Duration(rand.Intn(3)) * time.Second)
         }
+
         if err != nil || resp == nil {
             log.Printf("Failed to fetch URL %s after retries: %v", u, err)
             continue
         }
-        defer resp.Body.Close()  // Ensure the body is closed after use
+
+        defer resp.Body.Close()
 
         doc, err := goquery.NewDocumentFromReader(resp.Body)
         if err != nil {
@@ -152,45 +165,6 @@ func (s *SubJS) fetch(ctx context.Context, urls <-chan string, results chan stri
                         seen[js] = struct{}{}
                         results <- js
                     }
-                } else {
-                    js = fmt.Sprintf("%s://%s/%s", parsedURL.Scheme, parsedURL.Host, js)
-                    results <- js
-                }
-            }
-        })
-
-        // Find inline scripts matching JavaScript file patterns
-        r := regexp.MustCompile(`[(\w./:)]*\.js`)
-        doc.Find("script").Each(func(index int, s *goquery.Selection) {
-            scriptContent := s.Contents().Text()
-            matches := r.FindAllString(scriptContent, -1)
-            for _, js := range matches {
-                if strings.HasPrefix(js, "//") {
-                    js = fmt.Sprintf("%s:%s", parsedURL.Scheme, js)
-                } else if strings.HasPrefix(js, "/") {
-                    js = fmt.Sprintf("%s://%s%s", parsedURL.Scheme, parsedURL.Host, js)
-                } else if !strings.HasPrefix(js, "http") {
-                    js = fmt.Sprintf("%s://%s/%s", parsedURL.Scheme, parsedURL.Host, js)
-                }
-                if _, exists := seen[js]; !exists {
-                    seen[js] = struct{}{}
-                    results <- js
-                }
-            }
-        })
-
-        // Find script URLs in `div` elements with custom attributes like `data-script-src`
-        doc.Find("div").Each(func(index int, s *goquery.Selection) {
-            js, _ := s.Attr("data-script-src")
-            if js != "" {
-                if strings.HasPrefix(js, "http://") || strings.HasPrefix(js, "https://") {
-                    results <- js
-                } else if strings.HasPrefix(js, "//") {
-                    js = fmt.Sprintf("%s:%s", parsedURL.Scheme, js)
-                    results <- js
-                } else if strings.HasPrefix(js, "/") {
-                    js = fmt.Sprintf("%s://%s%s", parsedURL.Scheme, parsedURL.Host, js)
-                    results <- js
                 } else {
                     js = fmt.Sprintf("%s://%s/%s", parsedURL.Scheme, parsedURL.Host, js)
                     results <- js
