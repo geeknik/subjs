@@ -27,7 +27,11 @@ type SubJS struct {
 func New(opts *Options) *SubJS {
 	c := &http.Client{
 		Timeout:   time.Duration(opts.Timeout) * time.Second,
-		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: opts.InsecureSkipVerify}},
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: opts.InsecureSkipVerify},
+			// Allow following redirects
+			CheckRedirect: nil,
+		},
 	}
 	opts.UserAgents = []string{
 		"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3",
@@ -55,7 +59,8 @@ func (s *SubJS) Run() error {
 		defer input.Close()
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(s.opts.Timeout)*time.Second)
+	// Increase timeout to handle redirects and slow responses
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(s.opts.Timeout+10)*time.Second)
 	defer cancel()
 
 	// Initialize channels
