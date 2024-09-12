@@ -33,8 +33,6 @@ func New(opts *Options) *SubJS {
 		},
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: opts.InsecureSkipVerify},
-			// Allow following redirects
-			CheckRedirect: nil,
 		},
 	}
 	opts.UserAgents = []string{
