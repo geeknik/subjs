@@ -118,6 +118,9 @@ func (s *SubJS) fetch(ctx context.Context, urls <-chan string, results chan stri
             if err == nil && resp != nil && resp.StatusCode == http.StatusOK {
                 break
             }
+            if err != nil {
+                log.Printf("Error fetching URL %s: %v", u, err)
+            }
             if resp != nil {
                 log.Printf("Retrying URL %s: attempt %d, Status Code: %d", u, retries+1, resp.StatusCode)
             } else {
