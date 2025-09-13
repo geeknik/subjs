@@ -2,9 +2,11 @@ package subjs
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
 	"fmt"
+	"io"
 	"log"
 	"math/rand"
 	"net/http"
@@ -18,7 +20,7 @@ import (
 	"github.com/PuerkitoBio/goquery"
 )
 
-const version = `1.2.0`
+const version = `1.2.1`
 
 type SubJS struct {
 	client      *http.Client
@@ -29,7 +31,7 @@ type SubJS struct {
 
 func New(opts *Options) *SubJS {
 	c := &http.Client{
-		Timeout: time.Duration(opts.Timeout+10) * time.Second,
+		Timeout: time.Duration(opts.Timeout*4) * time.Second,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			// Allow following redirects
 			return nil
@@ -81,7 +83,7 @@ func (s *SubJS) Run() error {
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
 	// Increase timeout to handle redirects and slow responses
-	shutdownTimer := time.AfterFunc(time.Duration(s.opts.Timeout+10)*time.Second, func() {
+	shutdownTimer := time.AfterFunc(time.Duration(s.opts.Timeout*4)*time.Second, func() {
 		log.Println("Global timeout reached, initiating shutdown...")
 		cancel()
 	})
@@ -170,15 +172,13 @@ func (s *SubJS) processURL(ctx context.Context, inputURL string, results chan st
 	urlStr := validatedURL.String()
 
 	// Fetch the document with retry logic
-	resp, err := s.fetchWithRetry(ctx, urlStr)
+	data, err := s.fetchWithRetry(ctx, urlStr)
 	if err != nil {
 		return err
 	}
 
-	defer resp.Body.Close()
-
 	// Parse the document
-	doc, err := goquery.NewDocumentFromReader(resp.Body)
+	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(data))
 	if err != nil {
 		return ParseError{URL: urlStr, Reason: fmt.Sprintf("failed to parse HTML: %v", err)}
 	}
@@ -213,9 +213,8 @@ func (s *SubJS) processJavaScriptURL(jsSrc string, baseURL *url.URL, results cha
 }
 
 // fetchWithRetry performs HTTP request with exponential backoff retry logic
-func (s *SubJS) fetchWithRetry(ctx context.Context, url string) (*http.Response, error) {
+func (s *SubJS) fetchWithRetry(ctx context.Context, url string) ([]byte, error) {
 	var lastErr error
-	var lastResponse *http.Response
 
 	for attempt := 1; attempt <= s.retryConfig.MaxRetries; attempt++ {
 		// Create request with timeout context
@@ -231,27 +230,29 @@ func (s *SubJS) fetchWithRetry(ctx context.Context, url string) (*http.Response,
 		req.Header.Add("User-Agent", s.opts.RotateUserAgent())
 
 		resp, err := s.client.Do(req)
-		cancel() // Always cancel, regardless of success/failure
 
 		if err != nil {
+			cancel()
 			lastErr = HTTPRequestError{URL: url, Reason: fmt.Sprintf("request failed: %v", err), IsRetryable: true}
 		} else if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			// Success (2xx status codes)
-			return resp, nil
+			data, err := io.ReadAll(resp.Body)
+			cancel() // Cancel after successful read
+			resp.Body.Close()
+			if err != nil {
+				return nil, HTTPRequestError{URL: url, Reason: fmt.Sprintf("failed to read response body: %v", err), IsRetryable: false}
+			}
+			return data, nil
 		} else {
+			cancel()
 			// Handle non-success status codes
-			lastResponse = resp
 			lastErr = HTTPRequestError{URL: url, StatusCode: resp.StatusCode, Reason: fmt.Sprintf("HTTP %d", resp.StatusCode), IsRetryable: ShouldRetry(nil, resp.StatusCode, attempt, s.retryConfig.MaxRetries)}
+			resp.Body.Close()
 		}
 
 		// Check if we should retry
-		if !ShouldRetry(lastErr, resp.StatusCode, attempt, s.retryConfig.MaxRetries) {
+		if !ShouldRetry(lastErr, 0, attempt, s.retryConfig.MaxRetries) {
 			break
-		}
-
-		// Clean up response body if we have one
-		if resp != nil {
-			resp.Body.Close()
 		}
 
 		// Wait before retrying (only if not the last attempt)
@@ -260,11 +261,6 @@ func (s *SubJS) fetchWithRetry(ctx context.Context, url string) (*http.Response,
 			log.Printf("Retrying URL %s in %v (attempt %d/%d)", url, delay, attempt, s.retryConfig.MaxRetries)
 			time.Sleep(delay)
 		}
-	}
-
-	// Clean up final response if unsuccessful
-	if lastResponse != nil {
-		lastResponse.Body.Close()
 	}
 
 	if lastErr != nil {
