@@ -1,6 +1,4 @@
 dist
 .DS_Store
 subjs
-.aider*
-.aider*
-*.*~
+test.txt
