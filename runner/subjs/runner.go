@@ -11,7 +11,6 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -22,9 +21,10 @@ import (
 const version = `1.1.4`
 
 type SubJS struct {
-	client *http.Client
-	opts   *Options
-	seen   *sync.Map // Shared map for duplicate detection across all workers
+	client      *http.Client
+	opts        *Options
+	seen        *sync.Map // Shared map for duplicate detection across all workers
+	retryConfig *RetryConfig
 }
 
 func New(opts *Options) *SubJS {
@@ -48,9 +48,10 @@ func New(opts *Options) *SubJS {
 	}
 	rand.Seed(time.Now().UnixNano())
 	return &SubJS{
-		client: c,
-		opts:   opts,
-		seen:   &sync.Map{},
+		client:      c,
+		opts:        opts,
+		seen:        &sync.Map{},
+		retryConfig: NewRetryConfig(),
 	}
 }
 func (s *SubJS) Run() error {
@@ -99,6 +100,7 @@ func (s *SubJS) Run() error {
 	// Initialize channels
 	urls := make(chan string, s.opts.Workers)
 	results := make(chan string, s.opts.Workers)
+	errors := make(chan fetchError, s.opts.Workers)
 
 	// Start workers
 	var wg sync.WaitGroup
@@ -106,9 +108,16 @@ func (s *SubJS) Run() error {
 		wg.Add(1)
 		go func(ctx context.Context) {
 			defer wg.Done()
-			s.fetch(ctx, urls, results)
+			s.fetch(ctx, urls, results, errors)
 		}(ctx)
 	}
+
+	// Handle errors from workers
+	go func() {
+		for err := range errors {
+			log.Printf("Error processing URL '%s': %v", err.URL, err.Error)
+		}
+	}()
 
 	// Setup output
 	go func() {
@@ -133,86 +142,134 @@ func (s *SubJS) Run() error {
 
 	return nil
 }
-func (s *SubJS) fetch(ctx context.Context, urls <-chan string, results chan string) {
+
+// fetchError represents the result of processing a URL with error information
+type fetchError struct {
+	URL     string
+	Error   error
+	IsRetry bool
+}
+
+func (s *SubJS) fetch(ctx context.Context, urls <-chan string, results chan string, errors chan<- fetchError) {
 	for u := range urls {
-		if u == "" {
-			log.Printf("Empty URL encountered")
-			continue
+		if err := s.processURL(ctx, u, results); err != nil {
+			errors <- fetchError{URL: u, Error: err, IsRetry: false}
 		}
-
-		var (
-			resp *http.Response
-			err  error
-		)
-
-		for retries := 0; retries < 3; retries++ {
-			req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
-			if err != nil {
-				log.Printf("Error creating request for URL %s: %v", u, err)
-				break
-			}
-			req.Header.Add("User-Agent", s.opts.RotateUserAgent())
-
-			resp, err = s.client.Do(req)
-			if err == nil && resp != nil && resp.StatusCode == http.StatusOK {
-				break
-			}
-			if err != nil {
-				log.Printf("Error fetching URL %s: %v", u, err)
-			}
-			if resp != nil {
-				log.Printf("Retrying URL %s: attempt %d, Status Code: %d", u, retries+1, resp.StatusCode)
-			} else {
-				log.Printf("Retrying URL %s: attempt %d", u, retries+1)
-			}
-			time.Sleep(time.Duration(rand.Intn(3)) * time.Second)
-		}
-
-		if err != nil || resp == nil {
-			log.Printf("Failed to fetch URL %s after retries: %v", u, err)
-			continue
-		}
-
-		defer resp.Body.Close()
-
-		doc, err := goquery.NewDocumentFromReader(resp.Body)
-		if err != nil {
-			log.Printf("Error parsing document from URL %s: %v", u, err)
-			continue
-		}
-
-		parsedURL, err := url.Parse(u)
-		if err != nil || parsedURL == nil {
-			log.Printf("Failed to parse URL %s: %v", u, err)
-			continue
-		}
-
-		subJS := s // Capture the SubJS receiver to avoid naming conflict
-		doc.Find("script").Each(func(index int, s *goquery.Selection) {
-			js, _ := s.Attr("src")
-			if js != "" {
-				if strings.HasPrefix(js, "http://") || strings.HasPrefix(js, "https://") {
-					if _, exists := subJS.seen.Load(js); !exists {
-						subJS.seen.Store(js, struct{}{})
-						results <- js
-					}
-				} else if strings.HasPrefix(js, "//") {
-					js = fmt.Sprintf("%s:%s", parsedURL.Scheme, js)
-					if _, exists := subJS.seen.Load(js); !exists {
-						subJS.seen.Store(js, struct{}{})
-						results <- js
-					}
-				} else if strings.HasPrefix(js, "/") {
-					js = fmt.Sprintf("%s://%s%s", parsedURL.Scheme, parsedURL.Host, js)
-					if _, exists := subJS.seen.Load(js); !exists {
-						subJS.seen.Store(js, struct{}{})
-						results <- js
-					}
-				} else {
-					js = fmt.Sprintf("%s://%s/%s", parsedURL.Scheme, parsedURL.Host, js)
-					results <- js
-				}
-			}
-		})
 	}
+}
+
+// processURL handles the complete workflow for a single URL with improved error handling
+func (s *SubJS) processURL(ctx context.Context, inputURL string, results chan string) error {
+	// Validate and normalize URL
+	validatedURL, err := ValidateAndNormalizeURL(inputURL)
+	if err != nil {
+		return err
+	}
+
+	// Convert back to string for consistency
+	urlStr := validatedURL.String()
+
+	// Fetch the document with retry logic
+	resp, err := s.fetchWithRetry(ctx, urlStr)
+	if err != nil {
+		return err
+	}
+
+	defer resp.Body.Close()
+
+	// Parse the document
+	doc, err := goquery.NewDocumentFromReader(resp.Body)
+	if err != nil {
+		return ParseError{URL: urlStr, Reason: fmt.Sprintf("failed to parse HTML: %v", err)}
+	}
+
+	// Extract JavaScript files
+	doc.Find("script").Each(func(index int, sel *goquery.Selection) {
+		jsSrc, exists := sel.Attr("src")
+		if exists && jsSrc != "" {
+			s.processJavaScriptURL(jsSrc, validatedURL, results)
+		}
+	})
+
+	return nil
+}
+
+// processJavaScriptURL formats and deduplicates JavaScript URLs
+func (s *SubJS) processJavaScriptURL(jsSrc string, baseURL *url.URL, results chan string) {
+	// Format the JavaScript URL
+	formattedURL, err := FormatJavaScriptURL(jsSrc, baseURL)
+	if err != nil {
+		log.Printf("Warning: failed to format JavaScript URL '%s': %v", jsSrc, err)
+		return
+	}
+
+	if formattedURL != "" {
+		// Check for duplicates using the shared map
+		if _, exists := s.seen.Load(formattedURL); !exists {
+			s.seen.Store(formattedURL, struct{}{})
+			results <- formattedURL
+		}
+	}
+}
+
+// fetchWithRetry performs HTTP request with exponential backoff retry logic
+func (s *SubJS) fetchWithRetry(ctx context.Context, url string) (*http.Response, error) {
+	var lastErr error
+	var lastResponse *http.Response
+
+	for attempt := 1; attempt <= s.retryConfig.MaxRetries; attempt++ {
+		// Create request with timeout context
+		reqCtx, cancel := context.WithTimeout(ctx, time.Duration(s.opts.Timeout)*time.Second)
+
+		req, err := http.NewRequestWithContext(reqCtx, "GET", url, nil)
+		if err != nil {
+			cancel()
+			return nil, HTTPRequestError{URL: url, Reason: fmt.Sprintf("failed to create request: %v", err), IsRetryable: false}
+		}
+
+		// Add headers
+		req.Header.Add("User-Agent", s.opts.RotateUserAgent())
+
+		resp, err := s.client.Do(req)
+		cancel() // Always cancel, regardless of success/failure
+
+		if err != nil {
+			lastErr = HTTPRequestError{URL: url, Reason: fmt.Sprintf("request failed: %v", err), IsRetryable: true}
+		} else if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			// Success (2xx status codes)
+			return resp, nil
+		} else {
+			// Handle non-success status codes
+			lastResponse = resp
+			lastErr = HTTPRequestError{URL: url, StatusCode: resp.StatusCode, Reason: fmt.Sprintf("HTTP %d", resp.StatusCode), IsRetryable: ShouldRetry(nil, resp.StatusCode, attempt, s.retryConfig.MaxRetries)}
+		}
+
+		// Check if we should retry
+		if !ShouldRetry(lastErr, resp.StatusCode, attempt, s.retryConfig.MaxRetries) {
+			break
+		}
+
+		// Clean up response body if we have one
+		if resp != nil {
+			resp.Body.Close()
+		}
+
+		// Wait before retrying (only if not the last attempt)
+		if attempt < s.retryConfig.MaxRetries {
+			delay := s.retryConfig.GetDelay(attempt)
+			log.Printf("Retrying URL %s in %v (attempt %d/%d)", url, delay, attempt, s.retryConfig.MaxRetries)
+			time.Sleep(delay)
+		}
+	}
+
+	// Clean up final response if unsuccessful
+	if lastResponse != nil {
+		lastResponse.Body.Close()
+	}
+
+	if lastErr != nil {
+		return nil, lastErr
+	}
+
+	return nil, HTTPRequestError{URL: url, Reason: "max retries exceeded", IsRetryable: false}
 }
