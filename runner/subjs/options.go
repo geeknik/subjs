@@ -4,18 +4,23 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"sync"
 )
 
 type Options struct {
-	InputFile string
-	Workers          int
-	Timeout          int
-	UserAgent        string
-	UserAgents       []string
+	InputFile          string
+	Workers            int
+	Timeout            int
+	UserAgent          string
+	UserAgents         []string
 	InsecureSkipVerify bool
+	userAgentMutex     sync.Mutex // Mutex for thread-safe UserAgent rotation
 }
 
 func (opts *Options) RotateUserAgent() string {
+	opts.userAgentMutex.Lock()
+	defer opts.userAgentMutex.Unlock()
+
 	if len(opts.UserAgents) == 0 {
 		return ""
 	}

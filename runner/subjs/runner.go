@@ -4,15 +4,17 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
-	"time"
 	"fmt"
 	"log"
+	"math/rand"
 	"net/http"
 	"net/url"
 	"os"
-	"math/rand"
+	"os/signal"
 	"strings"
 	"sync"
+	"syscall"
+	"time"
 
 	"github.com/PuerkitoBio/goquery"
 )
@@ -22,17 +24,21 @@ const version = `1.1.4`
 type SubJS struct {
 	client *http.Client
 	opts   *Options
+	seen   *sync.Map // Shared map for duplicate detection across all workers
 }
 
 func New(opts *Options) *SubJS {
 	c := &http.Client{
-		Timeout:   time.Duration(opts.Timeout+10) * time.Second,
+		Timeout: time.Duration(opts.Timeout+10) * time.Second,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			// Allow following redirects
 			return nil
 		},
 		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: opts.InsecureSkipVerify},
+			TLSClientConfig:     &tls.Config{InsecureSkipVerify: opts.InsecureSkipVerify},
+			MaxIdleConns:        100,
+			MaxIdleConnsPerHost: 10,
+			IdleConnTimeout:     90 * time.Second,
 		},
 	}
 	opts.UserAgents = []string{
@@ -41,7 +47,11 @@ func New(opts *Options) *SubJS {
 		"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/56.0.2924.87 Safari/537.3",
 	}
 	rand.Seed(time.Now().UnixNano())
-	return &SubJS{client: c, opts: opts}
+	return &SubJS{
+		client: c,
+		opts:   opts,
+		seen:   &sync.Map{},
+	}
 }
 func (s *SubJS) Run() error {
 	// Setup input
@@ -61,14 +71,34 @@ func (s *SubJS) Run() error {
 		defer input.Close()
 	}
 
-	// Increase timeout to handle redirects and slow responses
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(s.opts.Timeout+10)*time.Second)
+	// Create context with cancellation for graceful shutdown
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// Handle shutdown signals
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	// Increase timeout to handle redirects and slow responses
+	shutdownTimer := time.AfterFunc(time.Duration(s.opts.Timeout+10)*time.Second, func() {
+		log.Println("Global timeout reached, initiating shutdown...")
+		cancel()
+	})
+
+	// Monitor for shutdown signals
+	go func() {
+		select {
+		case sig := <-sigChan:
+			log.Printf("Received signal: %v. Initiating graceful shutdown...", sig)
+			cancel()
+		case <-ctx.Done():
+			// Context was already cancelled
+		}
+	}()
 
 	// Initialize channels
 	urls := make(chan string, s.opts.Workers)
 	results := make(chan string, s.opts.Workers)
-
 
 	// Start workers
 	var wg sync.WaitGroup
@@ -97,88 +127,92 @@ func (s *SubJS) Run() error {
 	close(urls)
 	wg.Wait()
 	close(results)
+
+	// Stop the automatic shutdown timer since we completed normally
+	shutdownTimer.Stop()
+
 	return nil
 }
 func (s *SubJS) fetch(ctx context.Context, urls <-chan string, results chan string) {
-    seen := make(map[string]struct{})
-    for u := range urls {
-        if u == "" {
-            log.Printf("Empty URL encountered")
-            continue
-        }
+	for u := range urls {
+		if u == "" {
+			log.Printf("Empty URL encountered")
+			continue
+		}
 
-        var (
-            resp *http.Response
-            err  error
-        )
+		var (
+			resp *http.Response
+			err  error
+		)
 
-        for retries := 0; retries < 3; retries++ {
-            req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
-            if err != nil {
-                log.Printf("Error creating request for URL %s: %v", u, err)
-                break
-            }
-            req.Header.Add("User-Agent", s.opts.RotateUserAgent())
+		for retries := 0; retries < 3; retries++ {
+			req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+			if err != nil {
+				log.Printf("Error creating request for URL %s: %v", u, err)
+				break
+			}
+			req.Header.Add("User-Agent", s.opts.RotateUserAgent())
 
-            resp, err = s.client.Do(req)
-            if err == nil && resp != nil && resp.StatusCode == http.StatusOK {
-                break
-            }
-            if err != nil {
-                log.Printf("Error fetching URL %s: %v", u, err)
-            }
-            if resp != nil {
-                log.Printf("Retrying URL %s: attempt %d, Status Code: %d", u, retries+1, resp.StatusCode)
-            } else {
-                log.Printf("Retrying URL %s: attempt %d", u, retries+1)
-            }
-            time.Sleep(time.Duration(rand.Intn(3)) * time.Second)
-        }
+			resp, err = s.client.Do(req)
+			if err == nil && resp != nil && resp.StatusCode == http.StatusOK {
+				break
+			}
+			if err != nil {
+				log.Printf("Error fetching URL %s: %v", u, err)
+			}
+			if resp != nil {
+				log.Printf("Retrying URL %s: attempt %d, Status Code: %d", u, retries+1, resp.StatusCode)
+			} else {
+				log.Printf("Retrying URL %s: attempt %d", u, retries+1)
+			}
+			time.Sleep(time.Duration(rand.Intn(3)) * time.Second)
+		}
 
-        if err != nil || resp == nil {
-            log.Printf("Failed to fetch URL %s after retries: %v", u, err)
-            continue
-        }
+		if err != nil || resp == nil {
+			log.Printf("Failed to fetch URL %s after retries: %v", u, err)
+			continue
+		}
 
-        defer resp.Body.Close()
+		defer resp.Body.Close()
 
-        doc, err := goquery.NewDocumentFromReader(resp.Body)
-        if err != nil {
-            log.Printf("Error parsing document from URL %s: %v", u, err)
-            continue
-        }
+		doc, err := goquery.NewDocumentFromReader(resp.Body)
+		if err != nil {
+			log.Printf("Error parsing document from URL %s: %v", u, err)
+			continue
+		}
 
-        parsedURL, err := url.Parse(u)
-        if err != nil || parsedURL == nil {
-            log.Printf("Failed to parse URL %s: %v", u, err)
-            continue
-        }
+		parsedURL, err := url.Parse(u)
+		if err != nil || parsedURL == nil {
+			log.Printf("Failed to parse URL %s: %v", u, err)
+			continue
+		}
 
-        doc.Find("script").Each(func(index int, s *goquery.Selection) {
-            js, _ := s.Attr("src")
-            if js != "" {
-                if strings.HasPrefix(js, "http://") || strings.HasPrefix(js, "https://") {
-                    if _, exists := seen[js]; !exists {
-                        seen[js] = struct{}{}
-                        results <- js
-                    }
-                } else if strings.HasPrefix(js, "//") {
-                    js = fmt.Sprintf("%s:%s", parsedURL.Scheme, js)
-                    if _, exists := seen[js]; !exists {
-                        seen[js] = struct{}{}
-                        results <- js
-                    }
-                } else if strings.HasPrefix(js, "/") {
-                    js = fmt.Sprintf("%s://%s%s", parsedURL.Scheme, parsedURL.Host, js)
-                    if _, exists := seen[js]; !exists {
-                        seen[js] = struct{}{}
-                        results <- js
-                    }
-                } else {
-                    js = fmt.Sprintf("%s://%s/%s", parsedURL.Scheme, parsedURL.Host, js)
-                    results <- js
-                }
-            }
-        })
-    }
+		subJS := s // Capture the SubJS receiver to avoid naming conflict
+		doc.Find("script").Each(func(index int, s *goquery.Selection) {
+			js, _ := s.Attr("src")
+			if js != "" {
+				if strings.HasPrefix(js, "http://") || strings.HasPrefix(js, "https://") {
+					if _, exists := subJS.seen.Load(js); !exists {
+						subJS.seen.Store(js, struct{}{})
+						results <- js
+					}
+				} else if strings.HasPrefix(js, "//") {
+					js = fmt.Sprintf("%s:%s", parsedURL.Scheme, js)
+					if _, exists := subJS.seen.Load(js); !exists {
+						subJS.seen.Store(js, struct{}{})
+						results <- js
+					}
+				} else if strings.HasPrefix(js, "/") {
+					js = fmt.Sprintf("%s://%s%s", parsedURL.Scheme, parsedURL.Host, js)
+					if _, exists := subJS.seen.Load(js); !exists {
+						subJS.seen.Store(js, struct{}{})
+						results <- js
+					}
+				} else {
+					js = fmt.Sprintf("%s://%s/%s", parsedURL.Scheme, parsedURL.Host, js)
+					results <- js
+				}
+			}
+		})
+	}
 }
